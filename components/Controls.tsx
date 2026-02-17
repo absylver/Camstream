@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Settings, Monitor, Sparkles, X, Aperture, Maximize2, Wifi, Zap, Battery, Link2, Copy, Check,
-  SunMedium, Palette, Contrast, ScanEye, FlipHorizontal, Thermometer
+  SunMedium, ScanEye, FlipHorizontal, Thermometer, Mic, MicOff, Grid3X3, Droplets, UserRound
 } from 'lucide-react';
-import { StreamSettings, VideoDevice, AIAnalysisResult, BroadcastState, ImageSettings } from '../types';
+import { StreamSettings, VideoDevice, AudioDevice, AIAnalysisResult, BroadcastState, ImageSettings } from '../types';
 
 interface ControlsProps {
   settings: StreamSettings;
   onSettingsChange: (s: StreamSettings) => void;
   devices: VideoDevice[];
+  audioDevices: AudioDevice[];
   capabilities: MediaTrackCapabilities | null;
   onZoom: (val: number) => void;
+  zoomLevel: number;
   onAnalyze: () => void;
   onGenerateOverlay: (prompt: string) => void;
   analysisResult: AIAnalysisResult | null;
@@ -21,6 +23,7 @@ interface ControlsProps {
   broadcastState: BroadcastState;
   onBroadcastChange: (s: Partial<BroadcastState>) => void;
   onToggleTorch: (on: boolean) => void;
+  onToggleBackgroundBlur: (on: boolean) => void;
   imageSettings: ImageSettings;
   onImageSettingsChange: (s: ImageSettings) => void;
   onApplyConstraint: (name: string, val: any) => void;
@@ -30,8 +33,10 @@ const Controls: React.FC<ControlsProps> = ({
   settings,
   onSettingsChange,
   devices,
+  audioDevices,
   capabilities,
   onZoom,
+  zoomLevel,
   onAnalyze,
   onGenerateOverlay,
   analysisResult,
@@ -42,6 +47,7 @@ const Controls: React.FC<ControlsProps> = ({
   broadcastState,
   onBroadcastChange,
   onToggleTorch,
+  onToggleBackgroundBlur,
   imageSettings,
   onImageSettingsChange,
   onApplyConstraint
@@ -49,19 +55,22 @@ const Controls: React.FC<ControlsProps> = ({
   const [isOpen, setIsOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<'camera' | 'connect' | 'ai'>('camera');
   const [overlayPrompt, setOverlayPrompt] = useState('');
-  const [zoom, setZoom] = useState(1);
   const [copied, setCopied] = useState(false);
   const [localIp, setLocalIp] = useState("192.168.1.xxx");
+  const [bgBlur, setBgBlur] = useState(false);
   
-  // Hardware control states (local UI state, syncing is harder without reading back, assuming success)
+  // Hardware control states
   const [iso, setIso] = useState<number>(0);
   const [exposure, setExposure] = useState<number>(0);
   const [focusDistance, setFocusDistance] = useState<number>(0);
   const [wb, setWb] = useState<number>(0);
-
-  // Initialize ISO/Exposure from caps if possible? 
-  // Browser doesn't easily give current values without track.getSettings(). 
-  // For now we just use the sliders as relative controls or starting at min/center.
+  const [blurDepth, setBlurDepth] = useState<number>(50);
+  
+  // Track Auto/Manual states locally for UI feedback
+  const [autoIso, setAutoIso] = useState(true);
+  const [autoFocus, setAutoFocus] = useState(true);
+  const [autoWb, setAutoWb] = useState(true);
+  const [autoExposure, setAutoExposure] = useState(true);
 
   // Attempt to guess protocol/port
   useEffect(() => {
@@ -80,15 +89,21 @@ const Controls: React.FC<ControlsProps> = ({
     onImageSettingsChange({ ...imageSettings, [key]: val });
   };
 
-  const resetFilters = () => {
-    onImageSettingsChange({
-      brightness: 1,
-      contrast: 1,
-      saturation: 1,
-      sepia: 0,
-      mirror: imageSettings.mirror
-    });
+  // Helper to safely get capabilities or reasonable defaults if the browser doesn't report them
+  // This ensures the UI is always visible for the user to try.
+  const getCapRange = (key: string, def: {min: number, max: number, step: number}) => {
+    // @ts-ignore
+    if (capabilities && capabilities[key]) {
+      // @ts-ignore
+      return capabilities[key];
+    }
+    return def;
   };
+
+  // Safe checks for support (used only for initial state or critical disables if needed)
+  // We largely ignore these for rendering to ensure UI availability
+  // @ts-ignore
+  const hasTorch = capabilities && 'torch' in capabilities;
 
   if (!isOpen) {
     return (
@@ -101,22 +116,12 @@ const Controls: React.FC<ControlsProps> = ({
     );
   }
 
-  // Type guard helpers
-  // @ts-ignore
-  const supportsIso = capabilities && 'iso' in capabilities;
-  // @ts-ignore
-  const supportsExposure = capabilities && 'exposureCompensation' in capabilities;
-  // @ts-ignore
-  const supportsFocus = capabilities && 'focusDistance' in capabilities;
-  // @ts-ignore
-  const supportsWB = capabilities && 'colorTemperature' in capabilities;
-
   return (
     <div className="absolute top-0 right-0 h-full w-full sm:w-96 bg-black/85 backdrop-blur-xl border-l border-gray-800 text-white z-40 flex flex-col transition-transform">
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-gray-800">
         <h2 className="font-bold text-lg flex items-center gap-2">
-          <Monitor className="text-red-500" /> StreamCast AI
+          <Monitor className="text-red-500" /> CAM2PC
         </h2>
         <button onClick={() => setIsOpen(false)} className="hover:text-red-400">
           <X size={20} />
@@ -141,7 +146,7 @@ const Controls: React.FC<ControlsProps> = ({
           onClick={() => setActiveTab('ai')}
           className={`flex-1 p-3 text-sm font-medium ${activeTab === 'ai' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-400'}`}
         >
-          Gemini
+          Video Doctor
         </button>
       </div>
 
@@ -152,261 +157,341 @@ const Controls: React.FC<ControlsProps> = ({
         {activeTab === 'camera' && (
           <div className="space-y-6">
             
-            {/* Quick Toggles */}
+            {/* Quick Toggles Grid */}
             <div className="grid grid-cols-4 gap-2">
+               {/* Clean Mode */}
                <button 
                 onClick={onToggleCleanMode}
-                className="col-span-2 bg-green-600 hover:bg-green-700 text-white p-3 rounded-lg flex items-center justify-center gap-2 font-semibold transition-colors text-xs"
+                className="col-span-1 bg-gray-800 hover:bg-green-700 text-white p-2 rounded-lg flex flex-col items-center justify-center gap-1 border border-gray-700"
+                title="Hide UI"
               >
-                <Maximize2 size={16} /> Clean
+                <Maximize2 size={16} />
+                <span className="text-[10px]">Clean</span>
               </button>
+
+              {/* Eco Mode */}
                <button 
                 onClick={() => onBroadcastChange({ isEcoMode: !broadcastState.isEcoMode })}
                 className={`col-span-1 rounded-lg flex flex-col items-center justify-center p-2 border ${broadcastState.isEcoMode ? 'bg-green-900/40 border-green-500' : 'bg-gray-800 border-gray-700'}`}
+                title="Eco Mode"
               >
                 <Battery size={16} />
+                <span className="text-[10px]">Eco</span>
               </button>
+
+              {/* Grid Toggle */}
+              <button 
+                onClick={() => onBroadcastChange({ showGrid: !broadcastState.showGrid })}
+                className={`col-span-1 rounded-lg flex flex-col items-center justify-center p-2 border ${broadcastState.showGrid ? 'bg-blue-900/40 border-blue-500 text-blue-400' : 'bg-gray-800 border-gray-700'}`}
+                title="Show Grid"
+              >
+                <Grid3X3 size={16} />
+                <span className="text-[10px]">Grid</span>
+              </button>
+
+               {/* Torch Toggle (Flashlight) */}
                <button 
                 onClick={() => {
                   const newState = !broadcastState.isTorchOn;
                   onBroadcastChange({ isTorchOn: newState });
                   onToggleTorch(newState);
                 }}
-                disabled={!capabilities || !('torch' in capabilities)}
+                disabled={!hasTorch}
                 className={`col-span-1 rounded-lg flex flex-col items-center justify-center p-2 border ${broadcastState.isTorchOn ? 'bg-yellow-900/40 border-yellow-500 text-yellow-400' : 'bg-gray-800 border-gray-700 disabled:opacity-50'}`}
+                title="Torch"
               >
                 <Zap size={16} />
+                <span className="text-[10px]">Flash</span>
               </button>
             </div>
 
-            {/* Hardware Pro Controls */}
-            {(supportsIso || supportsExposure || supportsFocus || supportsWB) && (
-              <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-800 space-y-4">
-                <div className="flex items-center gap-2 text-xs font-bold text-gray-400 uppercase tracking-wider">
-                  <Aperture size={14} /> Hardware Pro
-                </div>
-                
-                {supportsExposure && (
-                  <div className="space-y-1">
-                    <div className="flex justify-between text-xs text-gray-400">
-                      <span>Exposure Comp</span>
-                      <span>{exposure.toFixed(1)}</span>
-                    </div>
-                    <input 
-                      type="range" 
-                      min={(capabilities as any).exposureCompensation.min}
-                      max={(capabilities as any).exposureCompensation.max}
-                      step={(capabilities as any).exposureCompensation.step}
-                      defaultValue={0}
-                      onChange={(e) => {
-                        const val = parseFloat(e.target.value);
-                        setExposure(val);
-                        onApplyConstraint('exposureCompensation', val);
-                        onApplyConstraint('exposureMode', 'manual'); // Ensure manual mode
-                      }}
-                      className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                    />
-                  </div>
-                )}
+             {/* Mirror Toggle */}
+             <button 
+                  onClick={() => handleImageChange('mirror', !imageSettings.mirror)}
+                  className={`w-full py-2 rounded text-xs font-semibold flex items-center justify-center gap-2 ${imageSettings.mirror ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400'}`}
+                >
+                  <FlipHorizontal size={14} /> Mirror Camera (Selfie Mode)
+            </button>
 
-                {supportsIso && (
-                   <div className="space-y-1">
-                    <div className="flex justify-between text-xs text-gray-400">
-                      <span>ISO</span>
-                      <span>{iso}</span>
-                    </div>
-                    <input 
-                      type="range" 
-                      min={(capabilities as any).iso.min}
-                      max={(capabilities as any).iso.max}
-                      step={(capabilities as any).iso.step}
-                      defaultValue={(capabilities as any).iso.min} // Start low usually
-                      onChange={(e) => {
-                        const val = parseFloat(e.target.value);
-                        setIso(val);
-                        onApplyConstraint('iso', val);
-                         onApplyConstraint('exposureMode', 'manual');
-                      }}
-                      className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                    />
-                  </div>
-                )}
-
-                {supportsWB && (
-                   <div className="space-y-1">
-                    <div className="flex justify-between text-xs text-gray-400">
-                      <span>Temp (K)</span>
-                      <span>{wb}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                       <Thermometer size={14} className="text-blue-400" />
-                       <input 
-                        type="range" 
-                        min={(capabilities as any).colorTemperature.min}
-                        max={(capabilities as any).colorTemperature.max}
-                        step={(capabilities as any).colorTemperature.step}
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value);
-                          setWb(val);
-                          onApplyConstraint('whiteBalanceMode', 'manual');
-                          onApplyConstraint('colorTemperature', val);
-                        }}
-                        className="w-full h-1 bg-gradient-to-r from-blue-500 via-white to-orange-500 rounded-lg appearance-none cursor-pointer"
-                      />
-                       <Thermometer size={14} className="text-orange-400" />
-                    </div>
-                  </div>
-                )}
-
-                 {supportsFocus && (
-                   <div className="space-y-1">
-                    <div className="flex justify-between text-xs text-gray-400">
-                      <span>Focus</span>
-                      <span>{focusDistance.toFixed(2)}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <ScanEye size={14} />
-                      <input 
-                        type="range" 
-                        min={(capabilities as any).focusDistance.min}
-                        max={(capabilities as any).focusDistance.max}
-                        step={(capabilities as any).focusDistance.step}
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value);
-                          setFocusDistance(val);
-                          onApplyConstraint('focusMode', 'manual');
-                          onApplyConstraint('focusDistance', val);
-                        }}
-                        className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                      />
-                    </div>
-                  </div>
-                )}
+            {/* Basic Source Settings */}
+            <div className="space-y-3 pt-2">
+              <div className="flex gap-2">
+                 <div className="flex-1 space-y-1">
+                    <label className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Camera</label>
+                    <select 
+                      value={settings.deviceId}
+                      onChange={(e) => onSettingsChange({...settings, deviceId: e.target.value})}
+                      className="w-full bg-black border border-gray-800 rounded p-2 text-xs focus:border-red-500 outline-none"
+                    >
+                      {devices.map(d => (
+                        <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
+                      ))}
+                    </select>
+                 </div>
+                 <div className="flex-1 space-y-1">
+                    <label className="text-xs text-gray-500 uppercase tracking-wider font-semibold flex items-center gap-1">
+                      {settings.audioDeviceId ? <Mic size={10} className="text-green-500"/> : <MicOff size={10} className="text-red-500"/>} Audio
+                    </label>
+                    <select 
+                      value={settings.audioDeviceId || ''}
+                      onChange={(e) => onSettingsChange({...settings, audioDeviceId: e.target.value})}
+                      className="w-full bg-black border border-gray-800 rounded p-2 text-xs focus:border-red-500 outline-none"
+                    >
+                      <option value="">Muted</option>
+                      {audioDevices.map(d => (
+                        <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
+                      ))}
+                    </select>
+                 </div>
               </div>
-            )}
+            </div>
 
-            {/* Software Studio Effects */}
-            <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-800 space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-xs font-bold text-gray-400 uppercase tracking-wider">
-                  <Palette size={14} /> Studio FX
-                </div>
-                <button onClick={resetFilters} className="text-[10px] text-red-400 hover:text-red-300">Reset</button>
-              </div>
-
-               {/* Brightness */}
-               <div className="space-y-1">
-                <div className="flex items-center justify-between text-xs text-gray-400">
-                  <SunMedium size={14} />
-                  <span>Brightness</span>
+            {/* Saturation Control (Software) */}
+             <div className="space-y-1 pt-2">
+                <div className="flex justify-between text-xs text-gray-400">
+                  <div className="flex items-center gap-1"><Droplets size={12}/> Saturation</div>
+                  <span>{imageSettings.saturation.toFixed(1)}</span>
                 </div>
                 <input 
-                  type="range" min="0.5" max="2" step="0.05"
-                  value={imageSettings.brightness}
-                  onChange={(e) => handleImageChange('brightness', parseFloat(e.target.value))}
-                  className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                />
-              </div>
-
-               {/* Contrast */}
-               <div className="space-y-1">
-                <div className="flex items-center justify-between text-xs text-gray-400">
-                  <Contrast size={14} />
-                  <span>Contrast</span>
-                </div>
-                <input 
-                  type="range" min="0.5" max="2" step="0.05"
-                  value={imageSettings.contrast}
-                  onChange={(e) => handleImageChange('contrast', parseFloat(e.target.value))}
-                  className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                />
-              </div>
-
-              {/* Saturation */}
-               <div className="space-y-1">
-                <div className="flex items-center justify-between text-xs text-gray-400">
-                  <Palette size={14} />
-                  <span>Saturation</span>
-                </div>
-                <input 
-                  type="range" min="0" max="2" step="0.05"
+                  type="range" min="0" max="2" step="0.1"
                   value={imageSettings.saturation}
                   onChange={(e) => handleImageChange('saturation', parseFloat(e.target.value))}
                   className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                 />
               </div>
 
-              {/* Sepia/Warmth */}
-               <div className="space-y-1">
-                <div className="flex items-center justify-between text-xs text-gray-400">
-                  <Thermometer size={14} />
-                  <span>Warmth</span>
+            {/* Hardware Pro Controls - Always Rendered */}
+            <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-800 space-y-4">
+              <div className="flex items-center gap-2 text-xs font-bold text-gray-400 uppercase tracking-wider border-b border-gray-800 pb-2 mb-2">
+                <Aperture size={14} /> Hardware Pro
+              </div>
+              
+              {/* Background Blur */}
+              <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-gray-300">
+                        <UserRound size={16} className={bgBlur ? "text-purple-400" : "text-gray-500"} />
+                        <span className="text-xs font-bold">Portrait Blur</span>
+                    </div>
+                    <button 
+                      onClick={() => {
+                        const newState = !bgBlur;
+                        setBgBlur(newState);
+                        onToggleBackgroundBlur(newState);
+                      }}
+                      className={`px-3 py-1 rounded text-[10px] font-bold transition-all ${bgBlur ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}
+                    >
+                      {bgBlur ? "ON" : "OFF"}
+                    </button>
+                  </div>
+                  
+                  {/* Blur Depth Slider */}
+                  <div className={`transition-all duration-300 ${bgBlur ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
+                    <div className="flex justify-between text-[10px] text-gray-500 mb-1">
+                      <span>Depth</span>
+                      <span>{blurDepth}%</span>
+                    </div>
+                    <input 
+                        type="range" min="0" max="100" 
+                        value={blurDepth}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value);
+                          setBlurDepth(val);
+                          // Try to apply custom constraint if supported by some browser variations
+                          onApplyConstraint('backgroundBlurAmount', val); 
+                        }}
+                        className="w-full h-1 bg-purple-900/50 rounded-lg appearance-none cursor-pointer"
+                    />
+                  </div>
+              </div>
+
+              {/* Focus Control */}
+              <div className="space-y-3 pt-2 border-t border-gray-800">
+                  <div className="flex justify-between items-center text-xs">
+                    <div className="flex items-center gap-2 text-gray-300 font-bold uppercase tracking-wider">
+                      <ScanEye size={16} className={autoFocus ? "text-green-500" : "text-white"} />
+                      <span>Focus</span>
+                    </div>
+                    
+                    <button 
+                      onClick={() => {
+                        const newAutoState = !autoFocus;
+                        setAutoFocus(newAutoState);
+                        if (newAutoState) {
+                            onApplyConstraint('focusMode', 'continuous');
+                        } else {
+                            onApplyConstraint('focusMode', 'manual');
+                            onApplyConstraint('focusDistance', focusDistance);
+                        }
+                      }}
+                      className={`px-3 py-1 rounded text-[10px] font-bold transition-all ${
+                        autoFocus 
+                          ? 'bg-green-600 text-white shadow-[0_0_10px_rgba(22,163,74,0.5)]' 
+                          : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+                      }`}
+                    >
+                      {autoFocus ? "AUTO" : "MANUAL"}
+                    </button>
+                  </div>
+
+                  <div className={`transition-all duration-300 ${autoFocus ? 'opacity-40 pointer-events-none blur-[1px]' : 'opacity-100'}`}>
+                      <div className="flex justify-between text-[10px] text-gray-500 mb-1 font-mono uppercase">
+                        <span>Macro</span>
+                        <span className={autoFocus ? "text-gray-500" : "text-white"}>{focusDistance.toFixed(2)}</span>
+                        <span>Infinity</span>
+                      </div>
+                      <input 
+                      type="range" 
+                      {...getCapRange('focusDistance', {min: 0, max: 10, step: 0.1})}
+                      value={focusDistance}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        setFocusDistance(val);
+                        if (autoFocus) {
+                            setAutoFocus(false); 
+                            onApplyConstraint('focusMode', 'manual');
+                        }
+                        onApplyConstraint('focusDistance', val);
+                      }}
+                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                    />
+                  </div>
                 </div>
-                <input 
-                  type="range" min="0" max="1" step="0.05"
-                  value={imageSettings.sepia}
-                  onChange={(e) => handleImageChange('sepia', parseFloat(e.target.value))}
-                  className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                />
-              </div>
 
-               {/* Mirror Toggle */}
-               <button 
-                  onClick={() => handleImageChange('mirror', !imageSettings.mirror)}
-                  className={`w-full py-2 rounded text-xs font-semibold flex items-center justify-center gap-2 ${imageSettings.mirror ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400'}`}
-                >
-                  <FlipHorizontal size={14} /> Mirror Camera
-               </button>
+              {/* Exposure Control */}
+              <div className="space-y-3 pt-2 border-t border-gray-800">
+                  <div className="flex justify-between items-center text-xs">
+                    <div className="flex items-center gap-2 text-gray-300 font-bold uppercase tracking-wider">
+                      <SunMedium size={16} className={autoExposure ? "text-green-500" : "text-white"} />
+                      <span>Exposure</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        {!autoExposure && <span className="text-white font-mono text-[10px] bg-black px-1 rounded">{exposure.toFixed(1)}</span>}
+                        <button 
+                          onClick={() => {
+                            onApplyConstraint('exposureMode', 'continuous');
+                            setExposure(0);
+                            setAutoExposure(true);
+                          }}
+                          className={`px-3 py-1 rounded text-[10px] font-bold transition-all ${autoExposure ? 'bg-green-600 text-white shadow-[0_0_10px_rgba(22,163,74,0.5)]' : 'bg-gray-700 text-gray-400'}`}
+                        >
+                          AUTO
+                        </button>
+                    </div>
+                  </div>
+                  <div className={`transition-all duration-300 ${autoExposure ? 'opacity-40 pointer-events-none' : 'opacity-100'}`}>
+                      <input 
+                      type="range" 
+                      {...getCapRange('exposureCompensation', {min: -2, max: 2, step: 0.1})}
+                      value={exposure}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        setExposure(val);
+                        setAutoExposure(false);
+                        onApplyConstraint('exposureCompensation', val);
+                        onApplyConstraint('exposureMode', 'manual'); 
+                      }}
+                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-yellow-500"
+                    />
+                  </div>
+                </div>
 
+              {/* ISO Control */}
+              <div className="space-y-3 pt-2 border-t border-gray-800">
+                  <div className="flex justify-between items-center text-xs">
+                    <div className="flex items-center gap-2 text-gray-300 font-bold uppercase tracking-wider">
+                      <Aperture size={16} className={autoIso ? "text-green-500" : "text-white"} />
+                      <span>ISO</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        {!autoIso && <span className="text-white font-mono text-[10px] bg-black px-1 rounded">{iso}</span>}
+                        <button 
+                          onClick={() => {
+                            onApplyConstraint('exposureMode', 'continuous');
+                            setAutoIso(true);
+                          }}
+                          className={`px-3 py-1 rounded text-[10px] font-bold transition-all ${autoIso ? 'bg-green-600 text-white shadow-[0_0_10px_rgba(22,163,74,0.5)]' : 'bg-gray-700 text-gray-400'}`}
+                        >
+                          AUTO
+                        </button>
+                    </div>
+                  </div>
+                  <div className={`transition-all duration-300 ${autoIso ? 'opacity-40 pointer-events-none' : 'opacity-100'}`}>
+                      <input 
+                      type="range" 
+                      {...getCapRange('iso', {min: 100, max: 1600, step: 100})}
+                      value={iso}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        setIso(val);
+                        setAutoIso(false);
+                        onApplyConstraint('iso', val);
+                        onApplyConstraint('exposureMode', 'manual');
+                      }}
+                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                    />
+                  </div>
+                </div>
+
+              {/* WB Control */}
+              <div className="space-y-3 pt-2 border-t border-gray-800">
+                  <div className="flex justify-between items-center text-xs">
+                    <div className="flex items-center gap-2 text-gray-300 font-bold uppercase tracking-wider">
+                      <Thermometer size={16} className={autoWb ? "text-green-500" : "text-white"} />
+                      <span>White Balance</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        {!autoWb && <span className="text-white font-mono text-[10px] bg-black px-1 rounded">{wb}K</span>}
+                        <button 
+                          onClick={() => {
+                            onApplyConstraint('whiteBalanceMode', 'continuous');
+                            setAutoWb(true);
+                          }}
+                          className={`px-3 py-1 rounded text-[10px] font-bold transition-all ${autoWb ? 'bg-green-600 text-white shadow-[0_0_10px_rgba(22,163,74,0.5)]' : 'bg-gray-700 text-gray-400'}`}
+                        >
+                          AUTO
+                        </button>
+                    </div>
+                  </div>
+                  <div className={`transition-all duration-300 ${autoWb ? 'opacity-40 pointer-events-none' : 'opacity-100'}`}>
+                    <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-blue-400">Cool</span>
+                        <input 
+                        type="range" 
+                        {...getCapRange('colorTemperature', {min: 2500, max: 6500, step: 50})}
+                        value={wb}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          setWb(val);
+                          setAutoWb(false);
+                          onApplyConstraint('whiteBalanceMode', 'manual');
+                          onApplyConstraint('colorTemperature', val);
+                        }}
+                        className="w-full h-2 bg-gradient-to-r from-blue-500 via-white to-orange-500 rounded-lg appearance-none cursor-pointer"
+                      />
+                        <span className="text-[10px] text-orange-400">Warm</span>
+                    </div>
+                  </div>
+                </div>
             </div>
 
-             {/* Basic Source Settings */}
-             <div className="space-y-2 pt-2 border-t border-gray-800">
-              <label className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Source & Res</label>
-              <select 
-                value={settings.deviceId}
-                onChange={(e) => onSettingsChange({...settings, deviceId: e.target.value})}
-                className="w-full bg-black border border-gray-800 rounded p-2 text-xs focus:border-red-500 outline-none"
-              >
-                {devices.map(d => (
-                  <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
-                ))}
-              </select>
-               <div className="grid grid-cols-3 gap-2 mt-2">
-                {['4k', '1080p', '720p'].map((res) => (
-                  <button
-                    key={res}
-                    onClick={() => onSettingsChange({...settings, resolution: res as any})}
-                    className={`p-1 rounded text-[10px] border ${settings.resolution === res ? 'bg-red-500/20 border-red-500 text-red-500' : 'border-gray-800 text-gray-500'}`}
-                  >
-                    {res.toUpperCase()}
-                  </button>
-                ))}
-              </div>
+            {/* Zoom Control - Always Rendered */}
+            <div className="space-y-1 pt-2 border-t border-gray-800">
+              <label className="text-xs text-gray-400 uppercase tracking-wider font-semibold flex justify-between">
+                <span>Digital Zoom</span>
+                <span>{zoomLevel.toFixed(1)}x</span>
+              </label>
+              <input 
+                type="range" 
+                {...getCapRange('zoom', {min: 1, max: 3, step: 0.1})}
+                value={zoomLevel}
+                onChange={(e) => {
+                  const z = parseFloat(e.target.value);
+                  onZoom(z);
+                }}
+                className="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer"
+              />
             </div>
-
-            {/* Zoom Control */}
-            {capabilities && 'zoom' in capabilities && (
-              <div className="space-y-1">
-                <label className="text-xs text-gray-400 uppercase tracking-wider font-semibold flex justify-between">
-                  <span>Digital Zoom</span>
-                  <span>{zoom.toFixed(1)}x</span>
-                </label>
-                <input 
-                  type="range" 
-                  min={1} 
-                  max={(capabilities as any).zoom?.max || 3} 
-                  step={0.1} 
-                  value={zoom}
-                  onChange={(e) => {
-                    const z = parseFloat(e.target.value);
-                    setZoom(z);
-                    onZoom(z);
-                  }}
-                  className="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer"
-                />
-              </div>
-            )}
           </div>
         )}
 
@@ -471,7 +556,7 @@ const Controls: React.FC<ControlsProps> = ({
             <div className="p-4 bg-gray-900 rounded-lg border border-gray-800">
               <div className="flex items-center gap-2 mb-3">
                 <Aperture className="text-blue-400" size={20} />
-                <h3 className="font-bold text-sm">Stream Doctor</h3>
+                <h3 className="font-bold text-sm">Video Doctor</h3>
               </div>
               <p className="text-xs text-gray-400 mb-4">
                 Let Gemini analyze your shot for lighting and composition.
@@ -494,9 +579,15 @@ const Controls: React.FC<ControlsProps> = ({
                     <span className="text-blue-400 font-bold text-xs uppercase block">Composition</span>
                     {analysisResult.composition}
                   </div>
+                  <div className="bg-gray-800 p-2 rounded">
+                    <span className="text-blue-400 font-bold text-xs uppercase block">Video Quality</span>
+                    {analysisResult.quality}
+                  </div>
                   <div className="bg-gray-800 p-2 rounded border border-blue-500/30">
-                    <span className="text-blue-400 font-bold text-xs uppercase block">Pro Tip</span>
-                    {analysisResult.advice}
+                    <span className="text-blue-400 font-bold text-xs uppercase block mb-1">Fixes & Solutions</span>
+                    <div className="whitespace-pre-line text-xs/5">
+                      {analysisResult.advice}
+                    </div>
                   </div>
                 </div>
               )}
@@ -541,7 +632,7 @@ const Controls: React.FC<ControlsProps> = ({
       {/* Footer */}
       <div className="p-4 border-t border-gray-800 text-center">
         <p className="text-[10px] text-gray-600">
-          StreamCast AI v1.2
+          CAM2PC v1.2
         </p>
       </div>
     </div>

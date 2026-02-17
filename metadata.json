@@ -1,5 +1,5 @@
 {
-  "name": "StreamCast AI",
+  "name": "CAM2PC",
   "description": "Turn your device into a professional, AI-enhanced broadcast camera source for OBS and vMix. Features clean HDMI output mode, high-bitrate selection, and Gemini-powered scene analysis.",
   "requestFramePermissions": [
     "camera",

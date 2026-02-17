@@ -8,11 +8,28 @@ interface CameraStageProps {
   cleanMode: boolean;
   broadcastState: BroadcastState;
   imageSettings: ImageSettings;
+  onZoom: (val: number) => void;
+  zoomLevel: number;
+  capabilities: MediaTrackCapabilities | null;
 }
 
-const CameraStage: React.FC<CameraStageProps> = ({ stream, overlay, onSnapshot, cleanMode, broadcastState, imageSettings }) => {
+const CameraStage: React.FC<CameraStageProps> = ({ 
+  stream, 
+  overlay, 
+  onSnapshot, 
+  cleanMode, 
+  broadcastState, 
+  imageSettings,
+  onZoom,
+  zoomLevel,
+  capabilities
+}) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  
+  // Pinch-to-zoom refs
+  const touchStartDist = useRef<number>(0);
+  const startZoomLevel = useRef<number>(1);
 
   useEffect(() => {
     if (videoRef.current && stream) {
@@ -49,12 +66,10 @@ const CameraStage: React.FC<CameraStageProps> = ({ stream, overlay, onSnapshot, 
       canvas.height = vid.videoHeight;
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        // Draw with filters? 
-        // Note: ctx.filter is supported in modern browsers, but we are capturing raw frame for analysis usually.
-        // For analysis, we probably want the RAW frame (gemini sees what camera sees).
-        // For OBS, the "Clean Feed" is this DOM element, so CSS filters applied to <video> are visible if capturing window.
-        // If capturing via HDMI out, CSS filters on <video> work.
-        
+        // We must draw the image with filters if we want the snapshot to match
+        // But drawing filters to canvas is complex (needs filter prop on context).
+        // For simplicity in analysis, raw feed is usually better, but let's try to match.
+        ctx.filter = `saturate(${imageSettings.saturation})`;
         ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
         const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
         const base64 = dataUrl.split(',')[1];
@@ -65,17 +80,55 @@ const CameraStage: React.FC<CameraStageProps> = ({ stream, overlay, onSnapshot, 
     const handleTrigger = () => capture();
     window.addEventListener('TRIGGER_SNAPSHOT', handleTrigger);
     return () => window.removeEventListener('TRIGGER_SNAPSHOT', handleTrigger);
-  }, [onSnapshot]);
+  }, [onSnapshot, imageSettings.saturation]);
 
-  const filterString = `
-    brightness(${imageSettings.brightness}) 
-    contrast(${imageSettings.contrast}) 
-    saturate(${imageSettings.saturation}) 
-    sepia(${imageSettings.sepia})
-  `;
+  // Gesture Handlers
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      const dist = Math.hypot(
+        e.touches[0].pageX - e.touches[1].pageX,
+        e.touches[0].pageY - e.touches[1].pageY
+      );
+      touchStartDist.current = dist;
+      startZoomLevel.current = zoomLevel;
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      const dist = Math.hypot(
+        e.touches[0].pageX - e.touches[1].pageX,
+        e.touches[0].pageY - e.touches[1].pageY
+      );
+
+      if (touchStartDist.current > 0) {
+        const scale = dist / touchStartDist.current;
+        let newZoom = startZoomLevel.current * scale;
+        
+        // Clamp based on capabilities
+        // @ts-ignore
+        const maxZoom = capabilities?.zoom?.max || 3;
+        // @ts-ignore
+        const minZoom = capabilities?.zoom?.min || 1;
+        
+        newZoom = Math.min(Math.max(newZoom, minZoom), maxZoom);
+        onZoom(newZoom);
+      }
+    }
+  };
+
+  const handleTouchEnd = () => {
+    touchStartDist.current = 0;
+  };
 
   return (
-    <div className={`relative w-full h-full bg-black flex items-center justify-center overflow-hidden ${broadcastState.showTally ? 'border-8 border-red-600' : ''}`}>
+    <div 
+      className={`relative w-full h-full bg-black flex items-center justify-center overflow-hidden ${broadcastState.showTally ? 'border-8 border-red-600' : ''}`}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      style={{ touchAction: 'none' }} // Prevent browser zooming/scrolling
+    >
       {/* Video Feed */}
       <video
         ref={videoRef}
@@ -85,10 +138,21 @@ const CameraStage: React.FC<CameraStageProps> = ({ stream, overlay, onSnapshot, 
         className="absolute inset-0 w-full h-full object-cover transition-all duration-200" 
         style={{ 
           objectFit: 'contain',
-          filter: filterString,
-          transform: imageSettings.mirror ? 'scaleX(-1)' : 'none'
+          transform: imageSettings.mirror ? 'scaleX(-1)' : 'none',
+          filter: `saturate(${imageSettings.saturation})`
         }}
       />
+
+      {/* Grid Overlay */}
+      {broadcastState.showGrid && (
+        <div className="absolute inset-0 z-20 pointer-events-none opacity-50">
+           {/* Thirds Grid */}
+           <div className="absolute top-1/3 left-0 w-full h-px bg-white/70"></div>
+           <div className="absolute top-2/3 left-0 w-full h-px bg-white/70"></div>
+           <div className="absolute left-1/3 top-0 w-px h-full bg-white/70"></div>
+           <div className="absolute left-2/3 top-0 w-px h-full bg-white/70"></div>
+        </div>
+      )}
 
       {/* Generated Overlay Layer */}
       {overlay && (

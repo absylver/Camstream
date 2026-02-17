@@ -8,6 +8,7 @@ import { analyzeFrame, generateOverlay } from './services/geminiService';
 // Initial settings
 const DEFAULT_SETTINGS: StreamSettings = {
   deviceId: '',
+  audioDeviceId: '', // Default to muted
   resolution: '1080p',
   frameRate: 30
 };
@@ -16,15 +17,13 @@ const DEFAULT_BROADCAST_STATE: BroadcastState = {
   isEcoMode: false,
   isTorchOn: false,
   showTally: false,
+  showGrid: false,
   networkUrl: '',
 };
 
 const DEFAULT_IMAGE_SETTINGS: ImageSettings = {
-  brightness: 1,
-  contrast: 1,
-  saturation: 1,
-  sepia: 0,
-  mirror: false
+  mirror: false,
+  saturation: 1.0
 };
 
 const App: React.FC = () => {
@@ -32,6 +31,7 @@ const App: React.FC = () => {
   const [broadcastState, setBroadcastState] = useState<BroadcastState>(DEFAULT_BROADCAST_STATE);
   const [imageSettings, setImageSettings] = useState<ImageSettings>(DEFAULT_IMAGE_SETTINGS);
   const [cleanMode, setCleanMode] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState(1);
   
   // AI State
   const [analysisResult, setAnalysisResult] = useState<AIAnalysisResult | null>(null);
@@ -39,7 +39,7 @@ const App: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   
   // Camera Hook
-  const { stream, error, devices, capabilities, applyZoom, toggleTorch, applyConstraint } = useMediaStream(settings);
+  const { stream, error, videoDevices, audioDevices, capabilities, applyZoom, toggleTorch, toggleBackgroundBlur, applyConstraint } = useMediaStream(settings);
 
   // Check URL params for clean mode (Auto-clean for OBS Browser Source)
   useEffect(() => {
@@ -51,10 +51,10 @@ const App: React.FC = () => {
 
   // Set default device if none selected
   useEffect(() => {
-    if (!settings.deviceId && devices.length > 0) {
-      setSettings(s => ({ ...s, deviceId: devices[0].deviceId }));
+    if (!settings.deviceId && videoDevices.length > 0) {
+      setSettings(s => ({ ...s, deviceId: videoDevices[0].deviceId }));
     }
-  }, [devices, settings.deviceId]);
+  }, [videoDevices, settings.deviceId]);
 
   // Handle Snapshot for Analysis
   const handleSnapshotForAnalysis = useCallback(async (base64Image: string) => {
@@ -90,6 +90,11 @@ const App: React.FC = () => {
     setBroadcastState(prev => ({ ...prev, ...updates }));
   };
 
+  const handleZoom = useCallback((level: number) => {
+    setZoomLevel(level);
+    applyZoom(level);
+  }, [applyZoom]);
+
   return (
     <div className="relative w-screen h-screen bg-black overflow-hidden select-none">
       
@@ -112,6 +117,9 @@ const App: React.FC = () => {
         cleanMode={cleanMode}
         broadcastState={broadcastState}
         imageSettings={imageSettings}
+        onZoom={handleZoom}
+        zoomLevel={zoomLevel}
+        capabilities={capabilities}
       />
 
       {/* Controls - Hidden in Clean Mode */}
@@ -119,9 +127,11 @@ const App: React.FC = () => {
         <Controls
           settings={settings}
           onSettingsChange={setSettings}
-          devices={devices}
+          devices={videoDevices}
+          audioDevices={audioDevices}
           capabilities={capabilities}
-          onZoom={applyZoom}
+          onZoom={handleZoom}
+          zoomLevel={zoomLevel}
           onAnalyze={triggerAnalysis}
           onGenerateOverlay={handleGenerateOverlay}
           analysisResult={analysisResult}
@@ -132,6 +142,7 @@ const App: React.FC = () => {
           broadcastState={broadcastState}
           onBroadcastChange={updateBroadcastState}
           onToggleTorch={toggleTorch}
+          onToggleBackgroundBlur={toggleBackgroundBlur}
           imageSettings={imageSettings}
           onImageSettingsChange={setImageSettings}
           onApplyConstraint={applyConstraint}

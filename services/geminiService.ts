@@ -10,25 +10,32 @@ const getClient = () => {
 export const analyzeFrame = async (base64Image: string): Promise<AIAnalysisResult> => {
   const client = getClient();
   
-  // Using flash-latest for fast multimodal inference
-  const modelId = "gemini-2.0-flash-exp"; 
+  // Using gemini-3-flash-preview for reliable multimodal inference
+  const modelId = "gemini-3-flash-preview"; 
 
-  const prompt = `Analyze this webcam frame for a live stream setup. 
-  Provide brief, professional feedback on:
-  1. Lighting quality (is it too dark, washed out, uneven?)
-  2. Composition (headroom, centering, background clutter)
-  3. Actionable advice to improve the shot.
+  const prompt = `Act as a professional broadcast video engineer. Analyze this webcam frame for a high-quality live stream.
   
+  Provide a strict technical evaluation in JSON format:
+  
+  1. **Lighting**: Analyze dynamic range, exposure levels (clipped highlights/crushed shadows), and color temperature.
+  2. **Composition**: Evaluate framing (Rule of Thirds), headroom, look room, and background aesthetics.
+  3. **Video Quality**: specifically analyze image noise (grain), focus sharpness, motion blur, and compression artifacts.
+  4. **Advice (Solutions)**: Provide a bulleted list of SPECIFIC, ACTIONABLE adjustments. 
+     - Suggest changing specific settings: "Lower ISO to reduce grain", "Increase Exposure Compensation", "Lock White Balance to a cooler temperature".
+     - Suggest physical changes: "Move key light closer", "Clean the lens", "Move camera to eye-level".
+     - Do NOT use generic phrases like "improve lighting". Be technical.
+
   Return raw JSON only.`;
 
   const responseSchema: Schema = {
     type: Type.OBJECT,
     properties: {
-      lighting: { type: Type.STRING },
-      composition: { type: Type.STRING },
-      advice: { type: Type.STRING },
+      lighting: { type: Type.STRING, description: "Technical assessment of lighting (e.g. 'Underexposed, mixed color temps')" },
+      composition: { type: Type.STRING, description: "Framing assessment (e.g. 'Too much headroom, centered')" },
+      quality: { type: Type.STRING, description: "Analysis of noise, focus, and clarity." },
+      advice: { type: Type.STRING, description: "Specific technical solutions and adjustments." },
     },
-    required: ["lighting", "composition", "advice"],
+    required: ["lighting", "composition", "quality", "advice"],
   };
 
   try {
@@ -50,7 +57,7 @@ export const analyzeFrame = async (base64Image: string): Promise<AIAnalysisResul
     if (!text) throw new Error("No response from AI");
     return JSON.parse(text) as AIAnalysisResult;
   } catch (error) {
-    console.error("Gemini Analysis Error:", error);
+    console.error("Video Doctor Analysis Error:", error);
     throw error;
   }
 };
@@ -58,7 +65,7 @@ export const analyzeFrame = async (base64Image: string): Promise<AIAnalysisResul
 export const generateOverlay = async (userPrompt: string): Promise<GeneratedOverlay> => {
   const client = getClient();
   
-  // Using pro for better code/SVG generation
+  // Using gemini-3-flash-preview for svg generation
   const modelId = "gemini-3-flash-preview"; 
 
   const systemPrompt = `You are a professional broadcast graphics designer. 
